@@ -385,17 +385,39 @@ class SlideTextCollector:
                 SlideTextCollector._collect_table_texts(shape, text_items, current_path)
                 return
             
-            # Handle text frames
+            # Handle text frames - collect per-paragraph to preserve structure
             if hasattr(shape, 'text_frame') and shape.text_frame:
-                full_text = shape.text_frame.text.strip()
-                if full_text and not TextProcessor.should_skip_translation(full_text):
-                    text_items.append({
-                        'type': 'text_frame_unified',
-                        'path': f"{current_path}.text_frame",
-                        'text': full_text,
-                        'shape': shape,
-                        'text_frame': shape.text_frame
-                    })
+                tf = shape.text_frame
+                paragraphs_with_text = [
+                    (i, p) for i, p in enumerate(tf.paragraphs) if p.text.strip()
+                ]
+                if not paragraphs_with_text:
+                    return
+                # Single paragraph: use unified type for backward compatibility
+                if len(paragraphs_with_text) == 1:
+                    idx, para = paragraphs_with_text[0]
+                    text = para.text.strip()
+                    if not TextProcessor.should_skip_translation(text):
+                        text_items.append({
+                            'type': 'text_frame_unified',
+                            'path': f"{current_path}.text_frame",
+                            'text': text,
+                            'shape': shape,
+                            'text_frame': tf
+                        })
+                else:
+                    # Multiple paragraphs: collect each separately
+                    for idx, para in paragraphs_with_text:
+                        text = para.text.strip()
+                        if not TextProcessor.should_skip_translation(text):
+                            text_items.append({
+                                'type': 'text_frame_paragraph',
+                                'path': f"{current_path}.text_frame.p{idx}",
+                                'text': text,
+                                'shape': shape,
+                                'text_frame': tf,
+                                'paragraph_index': idx
+                            })
                 return
             
             # Handle shapes with direct text property
@@ -444,7 +466,7 @@ class SlideTextCollector:
             
             if item_type == 'table_cell':
                 context_parts.append(f"[{i+1}] Table Cell: {text}")
-            elif item_type == 'text_frame_unified':
+            elif item_type in ('text_frame_unified', 'text_frame_paragraph'):
                 context_parts.append(f"[{i+1}] Text Frame: {text}")
             elif item_type == 'direct_text':
                 context_parts.append(f"[{i+1}] Direct Text: {text}")
