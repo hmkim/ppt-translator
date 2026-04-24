@@ -898,7 +898,7 @@ class ComplexityAnalyzer:
     def slide_has_complex_formatting(text_items: List[Dict]) -> bool:
         """Check if slide has complex formatting including bullets and indentation"""
         for item in text_items:
-            if item['type'] == 'text_frame_unified':
+            if item['type'] in ('text_frame_unified', 'text_frame_paragraph'):
                 if ComplexityAnalyzer._text_frame_has_complex_formatting(item['text_frame']):
                     return True
         return False
@@ -1137,6 +1137,15 @@ class TranslationStrategy:
             elif item_type == 'text_frame_unified':
                 text_frame = item['text_frame']
                 self.text_updater.update_text_frame(text_frame, translation, target_language)
+                return True
+            
+            elif item_type == 'text_frame_paragraph':
+                text_frame = item['text_frame']
+                para_idx = item['paragraph_index']
+                if para_idx < len(text_frame.paragraphs):
+                    paragraph = text_frame.paragraphs[para_idx]
+                    para_info = FormattingExtractor._extract_single_paragraph_info(paragraph)
+                    FormattingApplier.apply_paragraph_structure(paragraph, para_info, translation, target_language)
                 return True
                 
             elif item_type == 'direct_text':
