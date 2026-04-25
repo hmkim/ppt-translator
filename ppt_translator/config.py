@@ -19,7 +19,7 @@ class Config:
     
     # Translation settings from environment
     DEFAULT_TARGET_LANGUAGE = os.getenv('DEFAULT_TARGET_LANGUAGE', 'ko')
-    DEFAULT_MODEL_ID = os.getenv('BEDROCK_MODEL_ID', 'us.anthropic.claude-3-7-sonnet-20250219-v1:0')
+    DEFAULT_MODEL_ID = os.getenv('BEDROCK_MODEL_ID', 'global.anthropic.claude-sonnet-4-6')
     MAX_TOKENS = int(os.getenv('MAX_TOKENS', '4000'))
     TEMPERATURE = float(os.getenv('TEMPERATURE', '0.1'))
     ENABLE_POLISHING = os.getenv('ENABLE_POLISHING', 'true').lower() == 'true'
@@ -61,13 +61,30 @@ class Config:
     SUPPORTED_MODELS = [
         # Amazon Nova models (text-only)
         "us.amazon.nova-micro-v1:0",
-        "us.amazon.nova-lite-v1:0", 
+        "us.amazon.nova-lite-v1:0",
         "us.amazon.nova-pro-v1:0",
         "us.amazon.nova-premier-v1:0",
         "global.amazon.nova-2-lite-v1:0",
-        "us.amazon.nova-2-lite-v1:0"
-        
+        "us.amazon.nova-2-lite-v1:0",
+
         # Anthropic Claude models
+        # Claude 4.6 / 4.7 (no 20xxxxxx date-stamp suffix — AWS uses -v1 style for these)
+        "anthropic.claude-opus-4-7",
+        "us.anthropic.claude-opus-4-7",
+        "eu.anthropic.claude-opus-4-7",
+        "jp.anthropic.claude-opus-4-7",
+        "global.anthropic.claude-opus-4-7",
+        "anthropic.claude-opus-4-6-v1",
+        "us.anthropic.claude-opus-4-6-v1",
+        "eu.anthropic.claude-opus-4-6-v1",
+        "au.anthropic.claude-opus-4-6-v1",
+        "global.anthropic.claude-opus-4-6-v1",
+        "anthropic.claude-sonnet-4-6",
+        "us.anthropic.claude-sonnet-4-6",
+        "eu.anthropic.claude-sonnet-4-6",
+        "au.anthropic.claude-sonnet-4-6",
+        "global.anthropic.claude-sonnet-4-6",
+        # Claude 4.5 / 4
         "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "global.anthropic.claude-opus-4-5-20251101-v1:0",
         "global.anthropic.claude-sonnet-4-20250514-v1:0",
@@ -78,7 +95,7 @@ class Config:
         "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "us.anthropic.claude-opus-4-5-20251101-v1:0",
         "us.anthropic.claude-sonnet-4-20250514-v1:0",
-        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",      
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 
         # Meta Llama models
         "meta.llama4-scout-17b-instruct-v1:0",

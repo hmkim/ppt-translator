@@ -186,109 +186,78 @@ class FormattingExtractor:
         return formatting
     
     @staticmethod
+    def _parse_rgb_value(rgb) -> Optional[Dict[str, int]]:
+        """Parse an RGB value (RGBColor object, hex string, or int) into {'r','g','b'}."""
+        try:
+            if hasattr(rgb, 'r') and hasattr(rgb, 'g') and hasattr(rgb, 'b'):
+                return {'r': rgb.r, 'g': rgb.g, 'b': rgb.b}
+        except AttributeError:
+            pass
+
+        try:
+            rgb_str = str(rgb)
+            if len(rgb_str) == 6 and all(c in '0123456789ABCDEFabcdef' for c in rgb_str):
+                rgb_val = int(rgb_str, 16)
+            elif rgb_str.isdigit():
+                rgb_val = int(rgb_str)
+            else:
+                rgb_val = int(rgb)
+            return {
+                'r': (rgb_val >> 16) & 0xFF,
+                'g': (rgb_val >> 8) & 0xFF,
+                'b': rgb_val & 0xFF,
+            }
+        except (ValueError, TypeError) as e:
+            logger.debug(f"Could not parse RGB value: {rgb}, error: {e}")
+            return None
+
+    @staticmethod
     def _extract_font_color(font):
         """Extract font color information with enhanced preservation"""
         try:
             if not (hasattr(font, 'color') and font.color):
                 return None
-                
+
             color_obj = font.color
-            
-            # Debug logging
+
             if hasattr(color_obj, 'type'):
                 logger.debug(f"Color type detected: {color_obj.type}")
-            
-            # Check for RGB color (MSO_COLOR_TYPE.RGB = 1)
+
+            # RGB color (MSO_COLOR_TYPE.RGB = 1)
             if hasattr(color_obj, 'type') and color_obj.type == 1:
                 if hasattr(color_obj, 'rgb') and color_obj.rgb:
-                    # Extract RGB as individual components for better preservation
-                    rgb = color_obj.rgb
-                    try:
-                        if hasattr(rgb, 'r') and hasattr(rgb, 'g') and hasattr(rgb, 'b'):
-                            rgb_info = {'r': rgb.r, 'g': rgb.g, 'b': rgb.b}
-                        else:
-                            # Handle RGBColor object directly
-                            rgb_info = {'r': rgb.r, 'g': rgb.g, 'b': rgb.b}
-                    except AttributeError:
-                        # Handle string RGB values (hex format like 'FFFF00')
-                        try:
-                            rgb_str = str(rgb)
-                            if len(rgb_str) == 6 and all(c in '0123456789ABCDEFabcdef' for c in rgb_str):
-                                # Parse hex string
-                                rgb_val = int(rgb_str, 16)
-                                rgb_info = {
-                                    'r': (rgb_val >> 16) & 0xFF,
-                                    'g': (rgb_val >> 8) & 0xFF,
-                                    'b': rgb_val & 0xFF
-                                }
-                            else:
-                                # Try to parse as integer
-                                rgb_val = int(rgb_str) if rgb_str.isdigit() else int(rgb)
-                                rgb_info = {
-                                    'r': (rgb_val >> 16) & 0xFF,
-                                    'g': (rgb_val >> 8) & 0xFF,
-                                    'b': rgb_val & 0xFF
-                                }
-                        except (ValueError, TypeError) as e:
-                            logger.debug(f"Could not parse RGB value: {rgb}, error: {e}")
-                            return None
-                    
+                    rgb_info = FormattingExtractor._parse_rgb_value(color_obj.rgb)
+                    if rgb_info is None:
+                        return None
                     logger.debug(f"Extracted RGB color: {rgb_info}")
                     return ('rgb', rgb_info)
-            
-            # Check for theme color (MSO_COLOR_TYPE.THEME = 2)
+
+            # Theme color (MSO_COLOR_TYPE.THEME = 2)
             elif hasattr(color_obj, 'type') and color_obj.type == 2:
                 if hasattr(color_obj, 'theme_color'):
                     theme_info = {'theme_color': color_obj.theme_color}
-                    
-                    # Preserve brightness adjustments (tint/shade)
                     if hasattr(color_obj, 'brightness') and color_obj.brightness is not None:
                         theme_info['brightness'] = color_obj.brightness
-                    
                     logger.debug(f"Extracted theme color: {theme_info}")
                     return ('theme', theme_info)
-            
-            # Check for scheme color (MSO_COLOR_TYPE.SCHEME = 3)
+
+            # Scheme color (MSO_COLOR_TYPE.SCHEME = 3)
             elif hasattr(color_obj, 'type') and color_obj.type == 3:
                 if hasattr(color_obj, 'scheme_color'):
                     logger.debug(f"Extracted scheme color: {color_obj.scheme_color}")
                     return ('scheme', color_obj.scheme_color)
-            
-            # Fallback: try to get RGB directly if available
+
+            # Fallback: try RGB directly
             elif hasattr(color_obj, 'rgb') and color_obj.rgb:
-                rgb = color_obj.rgb
-                try:
-                    if hasattr(rgb, 'r') and hasattr(rgb, 'g') and hasattr(rgb, 'b'):
-                        rgb_info = {'r': rgb.r, 'g': rgb.g, 'b': rgb.b}
-                    else:
-                        rgb_info = {'r': rgb.r, 'g': rgb.g, 'b': rgb.b}
-                except AttributeError:
-                    try:
-                        rgb_str = str(rgb)
-                        if len(rgb_str) == 6 and all(c in '0123456789ABCDEFabcdef' for c in rgb_str):
-                            rgb_val = int(rgb_str, 16)
-                            rgb_info = {
-                                'r': (rgb_val >> 16) & 0xFF,
-                                'g': (rgb_val >> 8) & 0xFF,
-                                'b': rgb_val & 0xFF
-                            }
-                        else:
-                            rgb_val = int(rgb_str) if rgb_str.isdigit() else int(rgb)
-                            rgb_info = {
-                                'r': (rgb_val >> 16) & 0xFF,
-                                'g': (rgb_val >> 8) & 0xFF,
-                                'b': rgb_val & 0xFF
-                            }
-                    except (ValueError, TypeError) as e:
-                        logger.debug(f"Could not parse fallback RGB value: {rgb}, error: {e}")
-                        return None
-                
+                rgb_info = FormattingExtractor._parse_rgb_value(color_obj.rgb)
+                if rgb_info is None:
+                    return None
                 logger.debug(f"Extracted fallback RGB color: {rgb_info}")
                 return ('rgb', rgb_info)
-                
+
         except Exception as e:
             logger.debug(f"Error extracting font color: {e}")
-            
+
         return None
     
     @staticmethod
@@ -299,7 +268,31 @@ class FormattingExtractor:
 
 class FormattingApplier:
     """Handles application of formatting to PowerPoint elements"""
-    
+
+    @staticmethod
+    def _apply_language_font_to_run(run, target_language: str) -> None:
+        """Apply language-specific font to a single run (best-effort, silent on failure)."""
+        if not target_language:
+            return
+        try:
+            language_font = Config.get_font_for_language(target_language)
+            run.font.name = language_font
+        except Exception:
+            pass
+
+    @staticmethod
+    def _apply_language_font_to_text_frame(text_frame, target_language: str) -> None:
+        """Apply language-specific font to every run in a text frame (best-effort)."""
+        if not target_language or text_frame is None:
+            return
+        try:
+            language_font = Config.get_font_for_language(target_language)
+            for paragraph in text_frame.paragraphs:
+                for run in paragraph.runs:
+                    run.font.name = language_font
+        except Exception:
+            pass
+
     @staticmethod
     def apply_paragraph_structure(paragraph, para_info, new_text: str, target_language: str = None):
         """Apply paragraph structure and formatting with language-specific font"""
@@ -320,23 +313,15 @@ class FormattingApplier:
                 if para_info and para_info.get('runs'):
                     FormattingApplier._apply_run_formatting(run, para_info['runs'][0]['formatting'], target_language)
                 elif target_language:
-                    # Apply language-specific font even without existing formatting
-                    language_font = Config.get_font_for_language(target_language)
-                    run.font.name = language_font
-                    logger.debug(f"Applied default font '{language_font}' for language '{target_language}'")
-                    
+                    FormattingApplier._apply_language_font_to_run(run, target_language)
+
         except Exception as e:
             logger.error(f"Failed to apply paragraph structure: {e}")
             # Fallback
             paragraph.clear()
             run = paragraph.add_run()
             run.text = new_text
-            if target_language:
-                try:
-                    language_font = Config.get_font_for_language(target_language)
-                    run.font.name = language_font
-                except Exception:
-                    pass
+            FormattingApplier._apply_language_font_to_run(run, target_language)
     
     @staticmethod
     def _apply_paragraph_properties(paragraph, para_info):
@@ -467,12 +452,8 @@ class FormattingApplier:
                 if run_info_list:
                     FormattingApplier._apply_run_formatting(run, run_info_list[0]['formatting'], target_language)
                 elif target_language:
-                    try:
-                        language_font = Config.get_font_for_language(target_language)
-                        run.font.name = language_font
-                    except Exception:
-                        pass
-    
+                    FormattingApplier._apply_language_font_to_run(run, target_language)
+
     @staticmethod
     def _apply_multiple_runs(paragraph, new_text: str, run_info_list, target_language: str = None):
         """Apply multiple runs with different formatting and language-specific font"""
@@ -530,7 +511,6 @@ class FormattingApplier:
             if target_language:
                 language_font = Config.get_font_for_language(target_language)
                 font.name = language_font
-                logger.debug(f"Applied font '{language_font}' for language '{target_language}'")
             
             # Apply basic properties (but preserve original font if no target language)
             for key, attr in [('font_size', 'size'), ('font_bold', 'bold'), ('font_italic', 'italic')]:
@@ -637,15 +617,8 @@ class TextFrameUpdater:
         try:
             if not text_frame.paragraphs:
                 text_frame.text = new_text
-                # Apply language-specific font to simple text
                 if target_language and text_frame.paragraphs:
-                    try:
-                        language_font = Config.get_font_for_language(target_language)
-                        for paragraph in text_frame.paragraphs:
-                            for run in paragraph.runs:
-                                run.font.name = language_font
-                    except Exception:
-                        pass
+                    FormattingApplier._apply_language_font_to_text_frame(text_frame, target_language)
                 return
             
             # Extract paragraph structure information
@@ -665,16 +638,8 @@ class TextFrameUpdater:
         except Exception as e:
             logger.error(f"Formatting error: {str(e)}")
             text_frame.text = new_text
-            # Apply language-specific font to fallback text
-            if target_language and text_frame.paragraphs:
-                try:
-                    language_font = Config.get_font_for_language(target_language)
-                    for paragraph in text_frame.paragraphs:
-                        for run in paragraph.runs:
-                            run.font.name = language_font
-                except Exception:
-                    pass
-    
+            FormattingApplier._apply_language_font_to_text_frame(text_frame, target_language)
+
     @staticmethod
     def _choose_update_strategy(text_frame, new_text: str, paragraph_info, target_language: str = None):
         """Choose the appropriate update strategy with language-specific font"""
@@ -721,16 +686,8 @@ class TextFrameUpdater:
         except Exception as e:
             logger.error(f"Structure rebuild failed: {e}")
             text_frame.text = new_text
-            # Apply language-specific font to fallback text
-            if target_language and text_frame.paragraphs:
-                try:
-                    language_font = Config.get_font_for_language(target_language)
-                    for paragraph in text_frame.paragraphs:
-                        for run in paragraph.runs:
-                            run.font.name = language_font
-                except Exception:
-                    pass
-    
+            FormattingApplier._apply_language_font_to_text_frame(text_frame, target_language)
+
     @staticmethod
     def _update_with_hyperlinks_safe(text_frame, new_text: str, paragraph_info=None, target_language: str = None):
         """Update text frame while preserving hyperlinks and structure with language-specific font"""
@@ -755,25 +712,12 @@ class TextFrameUpdater:
                 else:
                     run = paragraph.add_run()
                     run.text = line.strip()
-                    if target_language:
-                        try:
-                            language_font = Config.get_font_for_language(target_language)
-                            run.font.name = language_font
-                        except Exception:
-                            pass
-                    
+                    FormattingApplier._apply_language_font_to_run(run, target_language)
+
         except Exception as e:
             logger.error(f"Safe hyperlink preservation failed: {e}")
             text_frame.text = new_text
-            # Apply language-specific font to fallback text
-            if target_language and text_frame.paragraphs:
-                try:
-                    language_font = Config.get_font_for_language(target_language)
-                    for paragraph in text_frame.paragraphs:
-                        for run in paragraph.runs:
-                            run.font.name = language_font
-                except Exception:
-                    pass
+            FormattingApplier._apply_language_font_to_text_frame(text_frame, target_language)
     
     @staticmethod
     def _apply_hyperlinks_to_paragraph(paragraph, line: str, para_info, target_language: str = None):
@@ -789,11 +733,7 @@ class TextFrameUpdater:
                 if runs_info:
                     FormattingApplier._apply_run_formatting(run, runs_info[0]['formatting'], target_language)
                 elif target_language:
-                    try:
-                        language_font = Config.get_font_for_language(target_language)
-                        run.font.name = language_font
-                    except Exception:
-                        pass
+                    FormattingApplier._apply_language_font_to_run(run, target_language)
                 return
             
             # Apply hyperlinks
@@ -848,12 +788,8 @@ class TextFrameUpdater:
                 if para_info.get('runs'):
                     FormattingApplier._apply_run_formatting(run, para_info['runs'][0]['formatting'], target_language)
                 elif target_language:
-                    try:
-                        language_font = Config.get_font_for_language(target_language)
-                        run.font.name = language_font
-                    except Exception:
-                        pass
-    
+                    FormattingApplier._apply_language_font_to_run(run, target_language)
+
     @staticmethod
     def _has_hyperlinks(text_frame):
         """Check if text frame contains hyperlinks"""
@@ -984,26 +920,31 @@ class TranslationStrategy:
         self.engine = engine
         self.text_updater = text_updater
     
-    def translate_slide(self, slide, target_language: str) -> Tuple[int, bool]:
+    def translate_slide(self, slide, target_language: str, translate_charts: bool = True) -> Tuple[int, bool]:
         """Translate a single slide using appropriate strategy"""
         text_items, notes_text = SlideTextCollector().collect_slide_texts(slide)
-        
+
+        # Collect chart text (titles/axes/categories/series) if enabled.
+        if translate_charts:
+            try:
+                from .chart_handler import ChartTextCollector
+                for shape_idx, shape in enumerate(slide.shapes):
+                    ChartTextCollector.collect(shape, text_items, str(shape_idx))
+            except Exception as e:
+                logger.debug(f"Chart collection failed: {e}")
+
         translated_count = 0
         notes_translated = False
-        
-        # Translate notes if present
+
         if notes_text:
             notes_translated = self._translate_notes(slide, notes_text, target_language)
-        
-        # Choose translation strategy
+
         if ComplexityAnalyzer.slide_has_complex_formatting(text_items):
             logger.info("🎨 Complex formatting detected, using individual translation")
             translated_count = self._translate_individually(text_items, target_language)
-        elif len(text_items) > Config.CONTEXT_THRESHOLD:
-            translated_count = self._translate_with_context(text_items, target_language)
         else:
             translated_count = self._translate_with_batch(text_items, target_language)
-        
+
         return translated_count, notes_translated
     
     def _translate_notes(self, slide, notes_text: str, target_language: str) -> bool:
@@ -1045,18 +986,6 @@ class TranslationStrategy:
         
         logger.info(f"🎯 Individual translation completed: {translated_count}/{len(text_items)} items processed")
         return translated_count
-    
-    def _translate_with_context(self, text_items: List[Dict], target_language: str) -> int:
-        """Translate using context-aware approach with language-specific font"""
-        if not text_items:
-            return 0
-        
-        try:
-            translations = self.engine.translate_with_context(text_items, target_language)
-            return self._apply_translations(text_items, translations, target_language)
-        except Exception as e:
-            logger.error(f"Context translation failed: {str(e)}")
-            return self._translate_with_batch(text_items, target_language)
     
     def _translate_with_batch(self, text_items: List[Dict], target_language: str) -> int:
         """Translate using batch approach with language-specific font"""
@@ -1123,15 +1052,8 @@ class TranslationStrategy:
                     self.text_updater.update_text_frame(cell.text_frame, translation, target_language)
                 else:
                     cell.text = translation
-                    # Apply language-specific font to table cell
-                    if target_language and hasattr(cell, 'text_frame') and cell.text_frame:
-                        try:
-                            language_font = Config.get_font_for_language(target_language)
-                            for paragraph in cell.text_frame.paragraphs:
-                                for run in paragraph.runs:
-                                    run.font.name = language_font
-                        except Exception:
-                            pass
+                    if target_language and hasattr(cell, 'text_frame'):
+                        FormattingApplier._apply_language_font_to_text_frame(cell.text_frame, target_language)
                 return True
                 
             elif item_type == 'text_frame_unified':
@@ -1150,126 +1072,253 @@ class TranslationStrategy:
                 
             elif item_type == 'direct_text':
                 item['shape'].text = translation
-                # Apply language-specific font to direct text
-                if target_language and hasattr(item['shape'], 'text_frame') and item['shape'].text_frame:
-                    try:
-                        language_font = Config.get_font_for_language(target_language)
-                        for paragraph in item['shape'].text_frame.paragraphs:
-                            for run in paragraph.runs:
-                                run.font.name = language_font
-                    except Exception:
-                        pass
+                if target_language and hasattr(item['shape'], 'text_frame'):
+                    FormattingApplier._apply_language_font_to_text_frame(item['shape'].text_frame, target_language)
                 return True
-            
+
+            elif item_type and item_type.startswith('chart_'):
+                from .chart_handler import ChartUpdater
+                return ChartUpdater.apply(item, translation, target_language)
+
         except Exception as e:
             logger.error(f"Error applying translation: {str(e)}")
-        
+
         return False
 
 
 class PowerPointTranslator:
     """Main PowerPoint translation class"""
-    
-    def __init__(self, model_id: str = Config.DEFAULT_MODEL_ID, enable_polishing: bool = Config.ENABLE_POLISHING):
+
+    def __init__(self, model_id: str = Config.DEFAULT_MODEL_ID,
+                 enable_polishing: bool = Config.ENABLE_POLISHING,
+                 cache=None, glossary: Optional[Dict[str, str]] = None,
+                 translate_charts: bool = True,
+                 source_language: Optional[str] = None,
+                 auto_detect_source: bool = True):
         self.model_id = model_id
         self.enable_polishing = enable_polishing
+        self.translate_charts = translate_charts
+        # Explicit override wins; otherwise we'll detect on first real run.
+        self.source_language = source_language
+        self.auto_detect_source = auto_detect_source and source_language is None
         self.config = Config()
-        self.engine = TranslationEngine(model_id, enable_polishing)
+        self.engine = TranslationEngine(model_id, enable_polishing, cache=cache,
+                                        glossary=glossary, source_language=source_language)
         self.text_updater = TextFrameUpdater()
         self.strategy = TranslationStrategy(self.engine, self.text_updater)
         self.deps = DependencyManager()
-    
-    def translate_presentation(self, input_file: str, output_file: str, target_language: str) -> TranslationResult:
-        """Translate entire PowerPoint presentation"""
+
+    def _maybe_detect_source_language(self, prs) -> None:
+        """Detect the source language from the first few slides if not set."""
+        if self.source_language or not self.auto_detect_source:
+            return
+        try:
+            # Gather text from up to the first 5 slides — enough signal without
+            # scanning the whole deck.
+            samples: List[str] = []
+            for slide in list(prs.slides)[:5]:
+                items, notes = SlideTextCollector().collect_slide_texts(slide)
+                samples.extend(i['text'] for i in items if i.get('text'))
+                if notes:
+                    samples.append(notes)
+                if sum(len(s) for s in samples) > 1500:
+                    break
+            if not samples:
+                return
+            from .language_detection import detect_language
+            detected = detect_language(samples, self.model_id, self.engine.bedrock)
+            self.source_language = detected
+            self.engine.source_language = detected
+        except Exception as e:
+            logger.debug(f"Source language auto-detect skipped: {e}")
+
+    def translate_presentation(self, input_file: str, output_file: str, target_language: str,
+                               progress_callback=None) -> TranslationResult:
+        """Translate entire PowerPoint presentation.
+
+        progress_callback(slide_idx_1based, metrics) is invoked after each slide.
+        """
         try:
             Presentation = self.deps.require('pptx')
             prs = Presentation(input_file)
             result = TranslationResult()
-            
+
             total_slides = len(prs.slides)
             logger.info(f"🎯 Starting translation of {total_slides} slides...")
             logger.info(f"🎨 Translation mode: {'Natural/Polished' if self.enable_polishing else 'Literal'}")
-            
+
+            self._maybe_detect_source_language(prs)
+
             for slide_idx, slide in enumerate(prs.slides):
-                logger.info(f"📄 Processing slide {slide_idx + 1}/{total_slides}")
-                
-                translated_count, notes_translated = self.strategy.translate_slide(slide, target_language)
-                
+                logger.debug(f"📄 Processing slide {slide_idx + 1}/{total_slides}")
+
+                translated_count, notes_translated = self.strategy.translate_slide(
+                    slide, target_language, translate_charts=self.translate_charts,
+                )
+
                 result.translated_count += translated_count
                 if notes_translated:
                     result.translated_notes_count += 1
                 result.total_shapes += len(slide.shapes)
-                
-                logger.info(f"✅ Slide {slide_idx + 1}: {translated_count} texts translated")
-            
-            # Save translated presentation
+
+                logger.debug(f"✅ Slide {slide_idx + 1}: {translated_count} texts translated")
+                if progress_callback is not None:
+                    try:
+                        progress_callback(slide_idx + 1, self.engine.metrics)
+                    except Exception as cb_err:
+                        logger.debug(f"progress_callback failed: {cb_err}")
+
             prs.save(output_file)
-            
-            # Apply post-processing (autofit)
+
             post_processor = PostProcessor(config=self.config)
             post_processor.process_presentation(output_file, output_file)
-            
+
             logger.info(f"🎉 Translation completed: {output_file}")
             logger.info(f"📊 Summary: {result.translated_count} texts, {result.translated_notes_count} notes")
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"❌ Translation failed: {str(e)}")
             raise
 
-    def translate_specific_slides(self, input_file: str, output_file: str, target_language: str, slide_numbers: List[int]) -> TranslationResult:
+    def translate_specific_slides(self, input_file: str, output_file: str, target_language: str,
+                                  slide_numbers: List[int], progress_callback=None) -> TranslationResult:
         """Translate specific slides in PowerPoint presentation"""
         try:
             Presentation = self.deps.require('pptx')
             prs = Presentation(input_file)
             result = TranslationResult()
-            
+
             total_slides = len(prs.slides)
-            
-            # Validate slide numbers
+
             invalid_slides = [num for num in slide_numbers if num < 1 or num > total_slides]
             if invalid_slides:
                 error_msg = f"Invalid slide numbers: {invalid_slides}. Valid range: 1-{total_slides}"
                 logger.error(error_msg)
                 result.errors.append(error_msg)
                 return result
-            
-            # Remove duplicates and sort
+
             slide_numbers = sorted(list(set(slide_numbers)))
-            
+
             logger.info(f"🎯 Starting translation of {len(slide_numbers)} specific slides: {slide_numbers}")
             logger.info(f"🎨 Translation mode: {'Natural/Polished' if self.enable_polishing else 'Literal'}")
-            
-            for slide_num in slide_numbers:
-                slide_idx = slide_num - 1  # Convert to 0-based index
+
+            self._maybe_detect_source_language(prs)
+
+            for processed_idx, slide_num in enumerate(slide_numbers, 1):
+                slide_idx = slide_num - 1
                 slide = prs.slides[slide_idx]
-                
-                logger.info(f"📄 Processing slide {slide_num}/{total_slides}")
-                
-                translated_count, notes_translated = self.strategy.translate_slide(slide, target_language)
-                
+
+                logger.debug(f"📄 Processing slide {slide_num}/{total_slides}")
+
+                translated_count, notes_translated = self.strategy.translate_slide(
+                    slide, target_language, translate_charts=self.translate_charts,
+                )
+
                 result.translated_count += translated_count
                 if notes_translated:
                     result.translated_notes_count += 1
                 result.total_shapes += len(slide.shapes)
-                
-                logger.info(f"✅ Slide {slide_num}: {translated_count} texts translated")
-            
-            # Save translated presentation
+
+                logger.debug(f"✅ Slide {slide_num}: {translated_count} texts translated")
+                if progress_callback is not None:
+                    try:
+                        progress_callback(processed_idx, self.engine.metrics)
+                    except Exception as cb_err:
+                        logger.debug(f"progress_callback failed: {cb_err}")
+
             prs.save(output_file)
-            
-            # Apply post-processing (autofit)
+
             post_processor = PostProcessor(config=self.config)
             post_processor.process_presentation(output_file, output_file)
-            
+
             logger.info(f"🎉 Translation completed: {output_file}")
             logger.info(f"📊 Summary: {result.translated_count} texts, {result.translated_notes_count} notes from {len(slide_numbers)} slides")
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"❌ Translation failed: {str(e)}")
+            raise
+
+    def collect_all_texts(self, input_file: str, slide_numbers: Optional[List[int]] = None,
+                          detect_source: bool = True) -> Dict[str, Any]:
+        """Walk the presentation and count translatable items without calling Bedrock.
+
+        Used by `--dry-run` to estimate token/cost before committing. If
+        `detect_source` is True and no source language is set, we run the
+        1-shot LLM detector so the caller can report it and estimate source
+        tokens with the right chars-per-token ratio.
+        """
+        try:
+            Presentation = self.deps.require('pptx')
+            prs = Presentation(input_file)
+
+            total_slides = len(prs.slides)
+            if slide_numbers:
+                slide_indices = [n - 1 for n in slide_numbers if 1 <= n <= total_slides]
+            else:
+                slide_indices = list(range(total_slides))
+
+            per_slide = []
+            total_chars = 0
+            total_items = 0
+            sample_texts: List[str] = []
+
+            for idx in slide_indices:
+                slide = prs.slides[idx]
+                text_items, notes_text = SlideTextCollector().collect_slide_texts(slide)
+                if self.translate_charts:
+                    try:
+                        from .chart_handler import ChartTextCollector
+                        for shape_idx, shape in enumerate(slide.shapes):
+                            ChartTextCollector.collect(shape, text_items, str(shape_idx))
+                    except Exception as e:
+                        logger.debug(f"Chart collection (dry-run) failed on slide {idx + 1}: {e}")
+
+                slide_chars = sum(len(item['text']) for item in text_items)
+                if notes_text:
+                    slide_chars += len(notes_text)
+                    total_items += 1
+                total_chars += slide_chars
+                total_items += len(text_items)
+                per_slide.append({
+                    'slide': idx + 1,
+                    'items': len(text_items),
+                    'chars': slide_chars,
+                })
+                for item in text_items:
+                    if len(sample_texts) < 10 and item['text'].strip():
+                        sample_texts.append(item['text'].strip())
+
+            detected_source = self.source_language
+            if detect_source and not detected_source and sample_texts:
+                try:
+                    from .language_detection import detect_language
+                    # Gather a broader sample for detection than the first 10 items.
+                    detection_pool: List[str] = []
+                    for idx in slide_indices[:5]:
+                        s_items, s_notes = SlideTextCollector().collect_slide_texts(prs.slides[idx])
+                        detection_pool.extend(i['text'] for i in s_items if i.get('text'))
+                        if s_notes:
+                            detection_pool.append(s_notes)
+                        if sum(len(t) for t in detection_pool) > 1500:
+                            break
+                    detected_source = detect_language(detection_pool, self.model_id, self.engine.bedrock)
+                except Exception as e:
+                    logger.debug(f"Dry-run source detection skipped: {e}")
+
+            return {
+                'slide_count': len(slide_indices),
+                'translatable_items': total_items,
+                'total_chars': total_chars,
+                'per_slide': per_slide,
+                'sample_texts': sample_texts,
+                'source_language': detected_source,
+            }
+        except Exception as e:
+            logger.error(f"❌ Failed to collect texts for dry-run: {str(e)}")
             raise
 
     def get_slide_count(self, input_file: str) -> int:

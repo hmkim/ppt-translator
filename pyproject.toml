@@ -1,6 +1,6 @@
 [project]
 name = "ppt-translator"
-version = "1.0.7"
+version = "1.0.8"
 description = "PowerPoint Translator using Amazon Bedrock"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,6 +10,9 @@ dependencies = [
     "fastmcp>=2.11.3",
     "python-dotenv>=1.1.1",
     "python-pptx>=1.0.2",
+    "tenacity>=8.2.0",
+    "pyyaml>=6.0",
+    "rich>=13.7.0",
 ]
 
 [project.scripts]

@@ -59,3 +59,12 @@ uv.lock
 # For debugging outputs
 debug/
 output/
+
+samples_debug/
+.claude/
+
+# Internal release notes (kept locally, not published)
+RELEASE_v*.md
+
+# Local MCP config (machine-specific absolute paths)
+.mcp.json

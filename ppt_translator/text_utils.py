@@ -158,23 +158,7 @@ class TextProcessor:
             cleaned = '\n'.join(translation_lines)
         
         return cleaned.strip()
-    
-    @staticmethod
-    def clean_translation_part(part: str) -> str:
-        """Clean individual translation part"""
-        cleaned = part.strip()
-        
-        # Remove quotes if wrapped
-        if (cleaned.startswith('"') and cleaned.endswith('"')) or \
-           (cleaned.startswith("'") and cleaned.endswith("'")):
-            cleaned = cleaned[1:-1].strip()
-        
-        # Remove numbered prefixes like "1. ", "2. ", etc.        
-        cleaned = re.sub(r'^\d+\.\s+', '', cleaned)
-                
-        # Remove bullet points
-        cleaned = re.sub(r'^[•\-\*]\s*', '', cleaned)
-        
+
     @staticmethod
     def clean_translation_part(part: str) -> str:
         """Clean individual translation part with stricter rules"""

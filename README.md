@@ -8,14 +8,26 @@ A powerful PowerPoint translation tool that leverages Amazon Bedrock models for 
 
 ## Features
 
+### New features
+
+- **Source Language Auto-Detect**: One-shot LLM detection from the document text; prompt, cache key, and cost estimate all use the detected language. Skips the API entirely if source == target.
+- **Chart Translation**: Translates chart titles, axis labels, category names, and series names — without touching numeric data
+- **Translation Cache**: Pluggable SQLite / in-memory cache that reuses prior translations across runs; cache key includes model, language, polishing, and glossary
+- **Custom Glossary**: External YAML glossary for consistent terminology per language; auto-detected from `./glossary.yaml`
+- **Dry-Run / Cost Preview**: `--dry-run` estimates tokens and cost before actually calling Bedrock
+- **Automatic Retry**: tenacity-backed exponential backoff on throttling / transient Bedrock errors
+- **Rich Progress**: Real-time progress bar with ETA, cache hit rate, and running token/cost totals — per-file slide progress rows in batch mode
+
+### Existing features
+
 - **PowerPoint Translation**: Translate text content in PowerPoint presentations
-- **Amazon Bedrock Integration**: Uses Amazon Bedrock models for high-quality translation
+- **Amazon Bedrock Integration**: Uses Amazon Bedrock models for high-quality translation (Claude Opus 4.7, Sonnet 4.6, Nova, Llama 4, and more)
 - **Format Preservation**: Maintains original formatting, layouts, and styles
 - **Language-Specific Fonts**: Automatically applies appropriate fonts for target languages
 - **Color & Style Preservation**: Preserves original text colors and formatting even for untranslated content
 - **Standalone & MCP Support**: Use as a command-line tool or integrate with AI assistants via FastMCP
-- **Multiple Languages**: Supports translation between various languages
-- **Batch Processing**: Can handle multiple slides, text elements, and entire folders efficiently
+- **Multiple Languages**: Supports translation between various languages (90+ supported)
+- **Batch Processing**: Can handle multiple slides, text elements, and entire folders efficiently (parallel workers)
 - **Selective Translation**: Translate entire presentations, specific slides, or all files in a folder
 
 ## Examples
@@ -35,15 +47,22 @@ The PowerPoint Translator maintains the original formatting while accurately tra
 </tr>
 </table>
 
-### Kiro MCP Examples
+### Claude Code MCP Examples
 
-![kiro1](imgs/kiro-example1.png)
-
-![kiro2](imgs/kiro-example2.png)
-
-![kiro3](imgs/kiro-example3.png)
+<table>
+<tr>
+<td><img src="imgs/mcp-cc1.png" alt="English" width="450"/></td>
+<td><img src="imgs/mcp-cc2.png" alt="Korean" width="450"/></td>
+</tr>
+<tr>
+<td align="center"><em>Check MCP</em></td>
+<td align="center"><em>MCP example</em></td>
+</tr>
+</table>
 
 ### Usage Examples
+
+> 🧾 **Quick reference**: see [docs/cheatsheet.md](docs/cheatsheet.md) for a compact list of everyday flags.
 
 **Translate entire presentation:**
 ```bash
@@ -59,11 +78,11 @@ uv run ppt-translate translate-slides samples/en.pptx --slides "1,3" --target-la
 
 **Batch translate all PPT files in a folder:**
 ```bash
-# Translate all PPT files in samples/ folder to Korean (parallel processing)
+# Recursive by default — translates all .pptx in samples/ and its subfolders
 uv run ppt-translate batch-translate samples/ --target-language ko
 
-# Recursively translate all PPT files in subfolders (like reInvent-2025/session1/, session2/, etc.)
-uv run ppt-translate batch-translate samples/ --target-language ko --recursive
+# Top level only (skip subfolders)
+uv run ppt-translate batch-translate samples/ --target-language ko --no-recursive
 
 # Specify output folder
 uv run ppt-translate batch-translate samples/ -t ja -o output/
@@ -71,16 +90,83 @@ uv run ppt-translate batch-translate samples/ -t ja -o output/
 # Specify number of parallel workers (default: 4)
 uv run ppt-translate batch-translate samples/ -t ko -w 4
 
-# Recursive with custom output and workers
-uv run ppt-translate batch-translate reInvent-2025/ -t ko -o translated/ --recursive -w 8
+# Custom output and workers
+uv run ppt-translate batch-translate reInvent-2025/ -t ko -o translated/ -w 8
 ```
+
+![batch-translate](imgs/batch-translate.png)
 
 **Get slide information:**
 ```bash
 uv run ppt-translate info samples/en.pptx
 ```
 
-![get-slideinfo](imgs/get-slideinfo.png)
+**Preview cost before translating (dry-run):**
+```bash
+# Estimate tokens / cost without calling Bedrock — no file is written
+uv run ppt-translate translate samples/en.pptx -t ko --dry-run
+```
+
+![dry-run](imgs/dry-run.png)
+
+**Translation cache (enabled by default):**
+```bash
+# SQLite cache at ~/.ppt-translator/cache.db — translations are reused across runs
+uv run ppt-translate translate samples/en.pptx -t ko
+
+# In-memory cache (per-process, no disk writes)
+uv run ppt-translate translate samples/en.pptx -t ko --cache-backend memory
+
+# Disable cache entirely
+uv run ppt-translate translate samples/en.pptx -t ko --no-cache
+
+# Custom cache path
+uv run ppt-translate translate samples/en.pptx -t ko --cache-path /tmp/my-cache.db
+```
+
+The cache key is `sha256(source_text + target_language + model_id + polishing + glossary_hash)`,
+so translations are automatically reused only when every relevant input matches.
+Changing the glossary, language, or model invalidates entries as expected.
+
+**Custom glossary (YAML):**
+```bash
+# Auto-detects ./glossary.yaml in the current directory
+uv run ppt-translate translate samples/en.pptx -t ko
+
+# Or point to a specific glossary file
+uv run ppt-translate translate samples/en.pptx -t ko -g my-glossary.yaml
+```
+
+Example `glossary.yaml`:
+```yaml
+ko:
+  "API": "API"            # src == tgt → keep as-is (do not translate)
+  "Foundation Model": "파운데이션 모델"
+  "Observability": "Observability"
+ja:
+  "Cloud": "クラウド"
+```
+
+**Skip chart translation (if you want charts untouched):**
+```bash
+uv run ppt-translate translate samples/en.pptx -t ko --no-charts
+```
+
+**Source language (auto-detected by default):**
+```bash
+# Source language is auto-detected on first run (1 extra Bedrock call per PPT)
+uv run ppt-translate translate samples/en.pptx -t ko
+
+# Or specify it explicitly to skip detection
+uv run ppt-translate translate samples/en.pptx --source-language en -t ko
+
+# Disable auto-detection entirely (let the model infer from context, like before)
+uv run ppt-translate translate samples/en.pptx -t ko --no-detect-source
+```
+
+The detected language is folded into the cache key, so the same text under
+different source languages won't cross-contaminate. If source == target
+(e.g., translating a Korean deck to Korean) the tool skips Bedrock entirely.
 
 ## Prerequisites
 
@@ -146,7 +232,7 @@ The service will automatically use your configured AWS credentials. You can spec
    
    # Translation Configuration
    DEFAULT_TARGET_LANGUAGE=ko
-   BEDROCK_MODEL_ID=us.anthropic.claude-3-7-sonnet-20250219-v1:0
+   BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-4-6
    
    # Translation Settings
    MAX_TOKENS=4000
@@ -212,37 +298,27 @@ uv run mcp_server.py
 python mcp_server.py
 ```
 
-## FastMCP Setup (Kiro)
+## FastMCP Setup
 
-If you haven't already installed Kiro, please refer to this:
+The same server works with any MCP host (Claude Code, Kiro, Kiro CLI, ...). Pick your host below — the JSON schema is identical; only the config file path differs.
 
-- Kiro: https://kiro.dev
-- Kiro-CLI: https://kiro.dev/cli
+### Shared server config
 
-### 2. Configure FastMCP Server
+Replace `/path/to/ppt-translator/` with the actual path to your clone. `AWS_*` env vars are optional when `aws configure` is already set up.
 
-Create or update your Q Developer FastMCP configuration file:
-
-#### Kiro
-**User Level** `~/.kiro/settings/mcp.json`
-
-#### Kiro CLI
-**On macOS/Linux**: `~/.aws/amazonq/mcp.json`
-**On Windows**: `%APPDATA%\amazonq\mcp.json`
-
-Add the PowerPoint Translator FastMCP server configuration:
-
-**Using uv**:
 ```json
 {
   "mcpServers": {
     "ppt-translator": {
       "command": "uv",
-      "args": ["run", "/path/to/ppt-translator/mcp_server.py"],
+      "args": [
+        "--project", "/path/to/ppt-translator",
+        "run", "/path/to/ppt-translator/mcp_server.py"
+      ],
       "env": {
         "AWS_REGION": "us-east-1",
         "AWS_PROFILE": "default",
-        "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-4-6"
       },
       "disabled": false,
       "autoApprove": [
@@ -256,38 +332,64 @@ Add the PowerPoint Translator FastMCP server configuration:
 }
 ```
 
-**Alternative configuration using python directly**:
-```json
-{
-  "mcpServers": {
-    "ppt-translator": {
-      "command": "python",
-      "args": ["/path/to/ppt-translator/mcp_server.py"],
-      "env": {
-        "AWS_REGION": "us-east-1",
-        "AWS_PROFILE": "default",
-        "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
-      },
-      "disabled": false,
-      "autoApprove": [
-        "translate_powerpoint",
-        "get_slide_info",
-        "get_slide_preview",
-        "translate_specific_slides"
-      ]    
-    }
-  }
-}
+> Prefer running with plain `python` instead of `uv`? Swap `"command": "uv"` and remove `"--project", ...` from `args`, leaving `"args": ["/path/to/ppt-translator/mcp_server.py"]`.
+
+### Claude Code
+
+[Claude Code](https://claude.com/claude-code) is Anthropic's official CLI. Two ways to register:
+
+**Option 1 — `claude mcp add` (fastest)**
+
+```bash
+# Project-scoped (only when running Claude Code inside this repo)
+claude mcp add ppt-translator \
+  --scope project \
+  -- uv --project /path/to/ppt-translator run /path/to/ppt-translator/mcp_server.py
+
+
+claude mcp add ppt-translator \
+  --scope project \
+  -- uv --project /Users/daekeun/Github/ppt-translator run /Users/daekeun/Github/ppt-translator/mcp_server.py
+
+# User-scoped (available in every project)
+claude mcp add ppt-translator \
+  --scope user \
+  -e AWS_REGION=us-east-1 \
+  -e AWS_PROFILE=default \
+  -e BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-4-6 \
+  -- uv --project /path/to/ppt-translator run /path/to/ppt-translator/mcp_server.py
 ```
 
-**Important**: Replace `/path/to/ppt-translator/` with the actual path to your cloned repository.
+Restart Claude Code, then run `/mcp` to confirm the server is connected.
 
-### 3. Use PowerPoint Translation
+**Option 2 — config file**
 
-Once connected, you can use commands like (User input does not have to be in English):
+Paste the [shared JSON](#shared-server-config) into one of:
+
+- Project-scoped: `.mcp.json` at the repo root (commit to share with the team)
+- User-scoped: `~/.claude.json` under the top-level `mcpServers` key
+
+**Troubleshooting**
+
+- `claude --debug` prints MCP connection logs at startup.
+- Test the server standalone: `uv run mcp_server.py`. If that errors, fix it before retrying the integration.
+
+### Kiro
+
+- Install Kiro: <https://kiro.dev> (CLI: <https://kiro.dev/cli>)
+- Paste the [shared JSON](#shared-server-config) into the appropriate file:
+  - **Kiro (desktop)**: `~/.kiro/settings/mcp.json`
+  - **Kiro CLI (macOS/Linux)**: `~/.aws/amazonq/mcp.json`
+  - **Kiro CLI (Windows)**: `%APPDATA%\amazonq\mcp.json`
+
+### Using it
+
+Just ask in natural language — the host picks the right tool automatically:
 
 ```
-Please translate slides 10 to 13 of original.pptx into Korean.
+Translate samples/en.pptx to Korean
+Batch-translate samples/ into Japanese, dry-run first
+Show me what's in slide 3 of en.pptx
 ```
 
 ## Available MCP Tools
@@ -299,8 +401,14 @@ The MCP server provides the following tools:
     - `input_file`: Path to the input PowerPoint file (.pptx)
     - `target_language`: Target language code (default: 'ko')
     - `output_file`: Path for the translated output file (optional, auto-generated)
-    - `model_id`: Amazon Bedrock model ID (default: Claude 3.7 Sonnet)
+    - `model_id`: Amazon Bedrock model ID (default from `BEDROCK_MODEL_ID` env)
     - `enable_polishing`: Enable natural language polishing (default: true)
+    - `glossary_file`: Path to a glossary YAML file (defaults to `./glossary.yaml` if present)
+    - `cache_backend`: `"sqlite"` (default), `"memory"`, or `"none"`
+    - `dry_run`: If true, estimate cost without translating (default: false)
+    - `translate_charts`: Translate chart titles/axes/categories/series (default: true)
+    - `source_language`: ISO 639-1 source code. Auto-detected if omitted.
+    - `auto_detect_source`: Run 1-shot LLM language detection when `source_language` is omitted (default: true)
 
 - **`translate_specific_slides`**: Translate only specific slides in a PowerPoint presentation
   - Parameters:
@@ -308,8 +416,15 @@ The MCP server provides the following tools:
     - `slide_numbers`: Comma-separated slide numbers to translate (e.g., "1,3,5" or "2-4,7")
     - `target_language`: Target language code (default: 'ko')
     - `output_file`: Path for the translated output file (optional, auto-generated)
-    - `model_id`: Amazon Bedrock model ID (default: Claude 3.7 Sonnet)
+    - `model_id`: Amazon Bedrock model ID (default from `BEDROCK_MODEL_ID` env)
     - `enable_polishing`: Enable natural language polishing (default: true)
+    - `glossary_file`, `cache_backend`, `dry_run`, `translate_charts`, `source_language`, `auto_detect_source`: same as above
+
+- **`batch_translate_powerpoint`**: Translate all PowerPoint files in a folder in parallel
+  - Parameters:
+    - `input_folder`, `target_language`, `output_folder`, `model_id`, `enable_polishing`
+    - `recursive`, `workers` (default: 4)
+    - `glossary_file`, `cache_backend`, `cache_path`, `dry_run`, `translate_charts`, `source_language`, `auto_detect_source`
 
 - **`get_slide_info`**: Get information about slides in a PowerPoint presentation
   - Parameters:
@@ -334,13 +449,35 @@ The MCP server provides the following tools:
 - `AWS_REGION`: AWS region for Bedrock service (default: us-east-1)
 - `AWS_PROFILE`: AWS profile to use (default: default)
 - `DEFAULT_TARGET_LANGUAGE`: Default target language for translation (default: ko)
-- `BEDROCK_MODEL_ID`: Bedrock model ID for translation (default: us.anthropic.claude-3-7-sonnet-20250219-v1:0)
+- `BEDROCK_MODEL_ID`: Bedrock model ID for translation (default: global.anthropic.claude-sonnet-4-6)
+- `BEDROCK_MAX_RETRIES`: Max retry attempts for transient Bedrock errors (default: 5)
 - `MAX_TOKENS`: Maximum tokens for translation requests (default: 4000)
 - `TEMPERATURE`: Temperature setting for AI model (default: 0.1)
 - `ENABLE_POLISHING`: Enable translation polishing (default: true)
 - `BATCH_SIZE`: Number of texts to process in a batch (default: 20)
 - `CONTEXT_THRESHOLD`: Number of texts to trigger context-aware translation (default: 5)
+- `CACHE_BACKEND`: Translation cache backend — `sqlite` / `memory` / `none` (default: sqlite)
+- `CACHE_PATH`: SQLite cache file location (default: `~/.ppt-translator/cache.db`)
 - `DEBUG`: Enable debug logging (default: false)
+
+### Supported Claude Models (Bedrock)
+
+The latest Anthropic models on Amazon Bedrock are registered in `Config.SUPPORTED_MODELS`
+and `pricing.py`. Common IDs you can pass via `--model-id` or `BEDROCK_MODEL_ID`:
+
+| Model | Global profile | US profile |
+|---|---|---|
+| Claude Opus 4.7 | `global.anthropic.claude-opus-4-7` | `us.anthropic.claude-opus-4-7` |
+| Claude Opus 4.6 | `global.anthropic.claude-opus-4-6-v1` | `us.anthropic.claude-opus-4-6-v1` |
+| Claude Sonnet 4.6 | `global.anthropic.claude-sonnet-4-6` | `us.anthropic.claude-sonnet-4-6` |
+| Claude Opus 4.5 | `global.anthropic.claude-opus-4-5-20251101-v1:0` | `us.anthropic.claude-opus-4-5-20251101-v1:0` |
+| Claude Sonnet 4.5 | `global.anthropic.claude-sonnet-4-5-20250929-v1:0` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| Claude Haiku 4.5 | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| Claude 3.7 Sonnet | — | `us.anthropic.claude-3-7-sonnet-20250219-v1:0` |
+
+Claude Opus 4.6 / 4.7 also support `eu.`, `au.` (Opus 4.6), and `jp.` (Opus 4.7)
+geo-specific inference profiles. Availability depends on your AWS account /
+region — check the AWS Bedrock console to confirm.
 
 ### Supported Languages
 
@@ -398,13 +535,21 @@ ppt-translator/
 │   ├── __init__.py                  # Package initialization
 │   ├── cli.py                       # Command-line interface
 │   ├── ppt_handler.py               # PowerPoint processing logic
-│   ├── translation_engine.py        # Translation service
-│   ├── bedrock_client.py            # Amazon Bedrock client
+│   ├── translation_engine.py        # Translation service (cache/glossary/metrics)
+│   ├── bedrock_client.py            # Amazon Bedrock client (with retry)
+│   ├── retry.py                     # tenacity-based retry policy for Bedrock
+│   ├── cache.py                     # Translation cache backends (SQLite/Memory/Null)
+│   ├── glossary.py                  # YAML glossary loader and hashing
+│   ├── pricing.py                   # Model pricing table + token/cost estimation
+│   ├── chart_handler.py             # Chart text collection and update
+│   ├── progress.py                  # Rich-based progress display
+│   ├── language_detection.py        # 1-shot source language detection (LLM)
 │   ├── post_processing.py           # Post-processing utilities
 │   ├── config.py                    # Configuration management
 │   ├── dependencies.py              # Dependency management
 │   ├── text_utils.py                # Text processing utilities
 │   └── prompts.py                   # Translation prompts
+├── glossary.yaml                    # Default glossary (per-language term map)
 ├── requirements.txt                 # Python dependencies
 ├── pyproject.toml                   # Project configuration (uv)
 ├── uv.lock                          # Dependency lock file

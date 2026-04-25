@@ -2,27 +2,56 @@
 Core translation engine using AWS Bedrock
 """
 import logging
-from typing import List, Dict, Any
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional
 from .config import Config
 from .bedrock_client import BedrockClient
 from .prompts import PromptGenerator
 from .text_utils import TextProcessor, SlideTextCollector
+from .cache import TranslationCache, NullCache, make_cache_key
+from .glossary import hash_glossary
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class TranslationMetrics:
+    """Running counters updated by the engine, read by CLI/UI layers."""
+    cache_hits: int = 0
+    cache_misses: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    api_calls: int = 0
+
+
 class TranslationEngine:
     """Core translation engine using AWS Bedrock"""
-    
-    def __init__(self, model_id: str = Config.DEFAULT_MODEL_ID, enable_polishing: bool = Config.ENABLE_POLISHING):
+
+    _config_logged = False  # class-level flag so parallel workers don't spam logs
+
+    def __init__(self, model_id: str = Config.DEFAULT_MODEL_ID,
+                 enable_polishing: bool = Config.ENABLE_POLISHING,
+                 cache: Optional[TranslationCache] = None,
+                 glossary: Optional[Dict[str, str]] = None,
+                 source_language: Optional[str] = None):
         self.model_id = model_id
         self.enable_polishing = enable_polishing
         self.bedrock = BedrockClient()
         self.text_processor = TextProcessor()
         self.prompt_generator = PromptGenerator()
-                
-        # Log configuration settings
-        self._log_configuration()
+        self.cache: TranslationCache = cache if cache is not None else NullCache()
+        self.glossary: Dict[str, str] = glossary or {}
+        self._glossary_hash = hash_glossary(self.glossary)
+        # None = unknown (let the model guess from context). Explicit value is
+        # preferred: it sharpens the prompt, disambiguates cache hits, and
+        # enables the "skip if source == target" short-circuit.
+        self.source_language: Optional[str] = source_language
+        self.metrics = TranslationMetrics()
+
+        # Log configuration once per process, not per engine instance.
+        if not TranslationEngine._config_logged:
+            self._log_configuration()
+            TranslationEngine._config_logged = True
         logger.info(f"🎨 Translation mode: {'Natural/Polished' if enable_polishing else 'Literal'}")
         
     def _log_configuration(self):
@@ -46,15 +75,52 @@ class TranslationEngine:
         logger.info(f"  Default Font: {Config.FONT_DEFAULT}")
             
     
+    def _cache_key(self, text: str, target_language: str) -> str:
+        return make_cache_key(
+            text, target_language, self.model_id,
+            self.enable_polishing, self._glossary_hash,
+            source_language=self.source_language,
+        )
+
+    def _should_skip_translation_entirely(self, target_language: str) -> bool:
+        """Skip the whole translation if source language is known and matches target."""
+        if not self.source_language:
+            return False
+        src = self.source_language.lower().split('-')[0]
+        tgt = (target_language or '').lower().split('-')[0]
+        return src == tgt
+
+    def _record_usage(self, response: Dict[str, Any]) -> None:
+        """Accumulate token usage from a Bedrock Converse response (best-effort)."""
+        try:
+            usage = response.get('usage') or {}
+            self.metrics.tokens_in += int(usage.get('inputTokens', 0))
+            self.metrics.tokens_out += int(usage.get('outputTokens', 0))
+        except (AttributeError, TypeError, ValueError):
+            pass
+
     def translate_text(self, text: str, target_language: str) -> str:
-        """Translate single text"""
+        """Translate a single text, hitting the cache first."""
         if self.text_processor.should_skip_translation(text):
             return text
-        
+        if self._should_skip_translation_entirely(target_language):
+            return text
+
+        cache_key = self._cache_key(text, target_language)
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            self.metrics.cache_hits += 1
+            return cached
+
+        self.metrics.cache_misses += 1
+
         try:
-            prompt = self.prompt_generator.create_single_prompt(target_language, self.enable_polishing)
-            
-            target_lang_name = Config.LANGUAGE_MAP.get(target_language, target_language)
+            prompt = self.prompt_generator.create_single_prompt(
+                target_language, self.enable_polishing, glossary=self.glossary,
+                source_language=self.source_language,
+            )
+
+            self.metrics.api_calls += 1
             response = self.bedrock.converse(
                 modelId=self.model_id,
                 system=[{"text": "You are a translator. Provide ONLY the translation. No explanations, alternatives, context notes, arrows, or additional text."}],
@@ -67,60 +133,80 @@ class TranslationEngine:
                     "temperature": Config.TEMPERATURE
                 }
             )
-            
+            self._record_usage(response)
+
             translated_text = response['output']['message']['content'][0]['text'].strip()
             translated_text = self.text_processor.clean_translation_response(translated_text)
-            
-            # If cleaning resulted in empty text, return original
+
             if not translated_text:
                 logger.warning(f"Empty translation response, keeping original: {text[:50]}...")
                 return text
-            
-            # Remove quotes if wrapped
+
             if (translated_text.startswith('"') and translated_text.endswith('"')) or \
                (translated_text.startswith("'") and translated_text.endswith("'")):
                 translated_text = translated_text[1:-1].strip()
-            
+
+            self.cache.set(cache_key, translated_text)
             logger.debug(f"Translated: '{text[:50]}...' -> '{translated_text[:50]}...'")
             return translated_text
-            
+
         except Exception as e:
             logger.error(f"Translation error: {str(e)}")
             return text
-    
+
     def translate_batch(self, texts: List[str], target_language: str) -> List[str]:
-        """Translate multiple texts in a single API call"""
+        """Translate multiple texts, calling the API only for cache misses."""
         if not texts:
             return []
-        
+
+        if self._should_skip_translation_entirely(target_language):
+            logger.info(f"🟰 Source language '{self.source_language}' matches target; skipping batch")
+            return list(texts)
+
         logger.info(f"🔄 Starting batch translation of {len(texts)} texts to {target_language}")
-        
-        # Filter translatable texts
-        translatable_texts = []
-        skip_indices = []
-        
+
+        # Classify each input: skip, cache-hit, or needs API.
+        skip_indices: set = set()
+        cached_at: Dict[int, str] = {}
+        uncached_indices: List[int] = []  # indices into `texts`
+        uncached_texts: List[str] = []
+
         for i, text in enumerate(texts):
             if self.text_processor.should_skip_translation(text):
-                skip_indices.append(i)
-                logger.debug(f"⏭️ Skipping text {i}: {text[:30]}...")
+                skip_indices.add(i)
+                continue
+            key = self._cache_key(text, target_language)
+            hit = self.cache.get(key)
+            if hit is not None:
+                cached_at[i] = hit
+                self.metrics.cache_hits += 1
             else:
-                translatable_texts.append(text)
-                logger.debug(f"✅ Will translate text {i}: {text[:30]}...")
-        
-        if not translatable_texts:
-            return texts
-        
+                uncached_indices.append(i)
+                uncached_texts.append(text)
+
+        if not uncached_texts:
+            # Everything skipped or served from cache — no API call needed.
+            results = texts.copy()
+            for i, v in cached_at.items():
+                results[i] = v
+            logger.info(f"✅ Batch fully served from cache ({len(cached_at)} hits)")
+            return results
+
+        self.metrics.cache_misses += len(uncached_texts)
+
         try:
-            # Create batch input with numbered format for better parsing
             batch_input = ""
-            for i, text in enumerate(translatable_texts, 1):
+            for i, text in enumerate(uncached_texts, 1):
                 batch_input += f"[{i}] {text}\n"
-            
-            prompt = self.prompt_generator.create_batch_prompt(target_language, self.enable_polishing)
-            
-            logger.info(f"🔄 Batch translating {len(translatable_texts)} texts...")
-            
-            target_lang_name = Config.LANGUAGE_MAP.get(target_language, target_language)
+
+            prompt = self.prompt_generator.create_batch_prompt(
+                target_language, self.enable_polishing, glossary=self.glossary,
+                source_language=self.source_language,
+            )
+
+            logger.info(f"🔄 Batch translating {len(uncached_texts)} texts (cache hits: {len(cached_at)})...")
+
+            self.metrics.api_calls += 1
             response = self.bedrock.converse(
                 modelId=self.model_id,
                 system=[{"text": "You are a translator. Translate each numbered text exactly as provided. Respond ONLY with translations in the same numbered format. Do not add explanations, alternatives, or additional content."}],
@@ -133,49 +219,38 @@ class TranslationEngine:
                     "temperature": Config.TEMPERATURE
                 }
             )
-            
+            self._record_usage(response)
+
             translated_batch = response['output']['message']['content'][0]['text'].strip()
-            
-            # Try numbered parsing first
-            cleaned_parts = self.text_processor.parse_numbered_response(translated_batch, len(translatable_texts))
-            
-            # If numbered parsing fails, try separator parsing
-            if len(cleaned_parts) != len(translatable_texts):
-                cleaned_parts = self.text_processor.parse_batch_response(translated_batch, len(translatable_texts))
-            
-            # Only allow exact match or fallback immediately
-            if len(cleaned_parts) != len(translatable_texts):
-                logger.warning(f"⚠️ Batch translation count mismatch. Expected {len(translatable_texts)}, got {len(cleaned_parts)}, using fallback")
+
+            cleaned_parts = self.text_processor.parse_numbered_response(translated_batch, len(uncached_texts))
+            if len(cleaned_parts) != len(uncached_texts):
+                cleaned_parts = self.text_processor.parse_batch_response(translated_batch, len(uncached_texts))
+
+            if len(cleaned_parts) != len(uncached_texts):
+                logger.warning(
+                    f"⚠️ Batch translation count mismatch. Expected {len(uncached_texts)}, "
+                    f"got {len(cleaned_parts)}, using fallback"
+                )
                 return self._fallback_individual_translation(texts, target_language)
-            
-            # Reconstruct results with skipped texts
+
+            # Write API results back into results and cache.
             results = texts.copy()
-            translatable_idx = 0
-            
-            for i, text in enumerate(texts):
-                if i not in skip_indices:
-                    if translatable_idx < len(cleaned_parts):
-                        results[i] = cleaned_parts[translatable_idx]
-                        translatable_idx += 1
-                    # If we run out of translations, keep original text
-            
-            logger.info(f"✅ Batch translation completed for {min(len(cleaned_parts), len(translatable_texts))} texts")
+            for i, v in cached_at.items():
+                results[i] = v
+            for original_idx, translated in zip(uncached_indices, cleaned_parts):
+                results[original_idx] = translated
+                self.cache.set(
+                    self._cache_key(texts[original_idx], target_language),
+                    translated,
+                )
+
+            logger.info(f"✅ Batch translation completed: {len(uncached_texts)} translated, {len(cached_at)} from cache")
             return results
-            
+
         except Exception as e:
             logger.error(f"❌ Batch translation error: {str(e)}")
             return self._fallback_individual_translation(texts, target_language)
-    
-    def translate_with_context(self, text_items: List[Dict], target_language: str, notes_text: str = "") -> List[str]:
-        """Translate with full context awareness - simplified to use batch translation"""
-        if not text_items:
-            return []
-        
-        logger.info(f"🔄 Context translation requested for {len(text_items)} texts, using batch translation instead")
-        
-        # Extract texts and use batch translation (more reliable)
-        texts = [item['text'] for item in text_items]
-        return self.translate_batch(texts, target_language)
     
     def _fallback_individual_translation(self, texts: List[str], target_language: str) -> List[str]:
         """Fallback to individual translation when batch fails"""
