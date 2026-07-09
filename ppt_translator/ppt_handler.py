@@ -12,6 +12,7 @@ from .dependencies import DependencyManager
 from .translation_engine import TranslationEngine
 from .text_utils import SlideTextCollector
 from .post_processing import PostProcessor
+from .ooxml_repair import repair_relationships
 
 logger = logging.getLogger(__name__)
 
@@ -1173,6 +1174,18 @@ class PowerPointTranslator:
             post_processor = PostProcessor(config=self.config)
             post_processor.process_presentation(output_file, output_file)
 
+            # python-pptx can drop package relationships it doesn't model (e.g.
+            # embedded-font entries with Target="NULL"), leaving dangling
+            # references that make PowerPoint report the file as corrupt.
+            # Restore any such relationships from the original source (best-effort).
+            try:
+                restored = repair_relationships(input_file, output_file)
+                if restored:
+                    _n = sum(len(v) for v in restored.values())
+                    logger.info(f"🔧 Repaired {_n} dropped relationship(s) after save")
+            except Exception as repair_err:
+                logger.warning(f"Relationship repair skipped: {repair_err}")
+
             logger.info(f"🎉 Translation completed: {output_file}")
             logger.info(f"📊 Summary: {result.translated_count} texts, {result.translated_notes_count} notes")
 
@@ -1232,6 +1245,18 @@ class PowerPointTranslator:
 
             post_processor = PostProcessor(config=self.config)
             post_processor.process_presentation(output_file, output_file)
+
+            # python-pptx can drop package relationships it doesn't model (e.g.
+            # embedded-font entries with Target="NULL"), leaving dangling
+            # references that make PowerPoint report the file as corrupt.
+            # Restore any such relationships from the original source (best-effort).
+            try:
+                restored = repair_relationships(input_file, output_file)
+                if restored:
+                    _n = sum(len(v) for v in restored.values())
+                    logger.info(f"🔧 Repaired {_n} dropped relationship(s) after save")
+            except Exception as repair_err:
+                logger.warning(f"Relationship repair skipped: {repair_err}")
 
             logger.info(f"🎉 Translation completed: {output_file}")
             logger.info(f"📊 Summary: {result.translated_count} texts, {result.translated_notes_count} notes from {len(slide_numbers)} slides")

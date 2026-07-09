@@ -180,20 +180,13 @@ def translate_powerpoint(
                                               auto_detect_source=auto_detect_source)
             result = translator.translate_presentation(str(input_path), output_file, target_language)
         
-        # Apply post-processing if enabled
+        # Text auto-fit post-processing and OOXML relationship repair are applied
+        # inside the translation engine (see PowerPointTranslator). Running them
+        # again here would redundantly re-save the file and re-introduce the
+        # dropped-relationship corruption that the repair step fixes.
         config = Config()
-        post_processing_applied = False
-        if config.get_bool('ENABLE_TEXT_AUTOFIT', True):
-            try:
-                verbose = config.get_bool('DEBUG', False)
-                post_processor = PowerPointPostProcessor(config, verbose=verbose)
-                # Overwrite the original output file instead of creating a new one
-                final_output = post_processor.process_presentation(output_file, output_file)
-                post_processing_applied = True
-                logger.info("Post-processing applied: Text auto-fitting enabled")
-            except Exception as e:
-                logger.warning(f"Post-processing failed: {e}")
-        
+        post_processing_applied = config.get_bool('ENABLE_TEXT_AUTOFIT', True)
+
         # Format success message
         lang_name = Config.LANGUAGE_MAP.get(target_language, target_language)
         translation_mode = "Natural/Polished" if enable_polishing else "Literal"
@@ -308,20 +301,13 @@ def translate_specific_slides(
         if result.errors:
             return f"❌ Translation failed: {'; '.join(result.errors)}"
         
-        # Apply post-processing if enabled
+        # Text auto-fit post-processing and OOXML relationship repair are applied
+        # inside the translation engine (see PowerPointTranslator). Running them
+        # again here would redundantly re-save the file and re-introduce the
+        # dropped-relationship corruption that the repair step fixes.
         config = Config()
-        post_processing_applied = False
-        if config.get_bool('ENABLE_TEXT_AUTOFIT', True):
-            try:
-                verbose = config.get_bool('DEBUG', False)
-                post_processor = PowerPointPostProcessor(config, verbose=verbose)
-                # Overwrite the original output file instead of creating a new one
-                final_output = post_processor.process_presentation(output_file, output_file)
-                post_processing_applied = True
-                logger.info("Post-processing applied: Text auto-fitting enabled")
-            except Exception as e:
-                logger.warning(f"Post-processing failed: {e}")
-        
+        post_processing_applied = config.get_bool('ENABLE_TEXT_AUTOFIT', True)
+
         # Format success message
         lang_name = Config.LANGUAGE_MAP.get(target_language, target_language)
         translation_mode = "Natural/Polished" if enable_polishing else "Literal"
