@@ -24,6 +24,44 @@ def _build_boto_config():
     return BotoConfig(retries={'mode': 'adaptive', 'max_attempts': 2})
 
 
+# Substrings identifying models that reject the `temperature` inference
+# parameter (adaptive-thinking models such as Claude Sonnet 5, whose reasoning
+# is always on). Extend this tuple as more such models ship.
+_NO_TEMPERATURE_MODEL_MARKERS = ('claude-sonnet-5',)
+
+
+def _has_temperature(kwargs) -> bool:
+    """True if the converse kwargs carry a `temperature` inference param."""
+    inference_config = kwargs.get('inferenceConfig')
+    return isinstance(inference_config, dict) and 'temperature' in inference_config
+
+
+def _without_temperature(kwargs) -> dict:
+    """Return a shallow copy of kwargs with `temperature` removed."""
+    inference_config = {
+        k: v for k, v in kwargs['inferenceConfig'].items() if k != 'temperature'
+    }
+    return {**kwargs, 'inferenceConfig': inference_config}
+
+
+def _strip_unsupported_temperature(kwargs) -> dict:
+    """Proactively drop `temperature` for models known to reject it.
+
+    Avoids a wasted first API call on every request for those models.
+    """
+    if not _has_temperature(kwargs):
+        return kwargs
+    model_id = (kwargs.get('modelId') or '').lower()
+    if any(marker in model_id for marker in _NO_TEMPERATURE_MODEL_MARKERS):
+        return _without_temperature(kwargs)
+    return kwargs
+
+
+def _is_temperature_rejected_error(error: Exception) -> bool:
+    """True if a Bedrock error indicates the `temperature` param was rejected."""
+    return 'temperature' in str(error).lower()
+
+
 class BedrockClient:
     """AWS Bedrock client wrapper with connection management"""
 
@@ -87,7 +125,24 @@ class BedrockClient:
 
     @bedrock_retry
     def converse(self, **kwargs) -> Any:
-        """Wrapper for converse API call with automatic retry on transient errors."""
+        """Wrapper for converse API call with automatic retry on transient errors.
+
+        Some newer adaptive-thinking models (e.g., Claude Sonnet 5) reject the
+        `temperature` inference parameter. We proactively drop it for models
+        known to reject it, and also fall back to a temperature-free retry if
+        any model rejects it at call time.
+        """
         if not self.is_ready():
             raise Exception("AWS Bedrock client not initialized")
-        return self.client.converse(**kwargs)
+
+        kwargs = _strip_unsupported_temperature(kwargs)
+        try:
+            return self.client.converse(**kwargs)
+        except Exception as e:
+            if _is_temperature_rejected_error(e) and _has_temperature(kwargs):
+                logger.warning(
+                    "Model '%s' rejected 'temperature'; retrying without it.",
+                    kwargs.get('modelId', '?'),
+                )
+                return self.client.converse(**_without_temperature(kwargs))
+            raise

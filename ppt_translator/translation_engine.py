@@ -14,6 +14,20 @@ from .glossary import hash_glossary
 logger = logging.getLogger(__name__)
 
 
+def _extract_response_text(response: Dict[str, Any]) -> str:
+    """Extract the assistant's text from a Bedrock Converse response.
+
+    Adaptive-thinking models (e.g., Claude Sonnet 5) can prepend a
+    ``reasoningContent`` block to the message content, so we return the first
+    block that carries a ``text`` key instead of assuming it is at index 0.
+    """
+    content = response.get('output', {}).get('message', {}).get('content', []) or []
+    for block in content:
+        if isinstance(block, dict) and 'text' in block:
+            return block['text']
+    return ''
+
+
 @dataclass
 class TranslationMetrics:
     """Running counters updated by the engine, read by CLI/UI layers."""
@@ -135,7 +149,7 @@ class TranslationEngine:
             )
             self._record_usage(response)
 
-            translated_text = response['output']['message']['content'][0]['text'].strip()
+            translated_text = _extract_response_text(response).strip()
             translated_text = self.text_processor.clean_translation_response(translated_text)
 
             if not translated_text:
@@ -221,7 +235,7 @@ class TranslationEngine:
             )
             self._record_usage(response)
 
-            translated_batch = response['output']['message']['content'][0]['text'].strip()
+            translated_batch = _extract_response_text(response).strip()
 
             cleaned_parts = self.text_processor.parse_numbered_response(translated_batch, len(uncached_texts))
             if len(cleaned_parts) != len(uncached_texts):
